@@ -1,0 +1,417 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Student Catalog</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+        }
+        table, th, td {
+            border: 1px solid black;
+            border-collapse: collapse;
+            padding: 8px;
+            text-align: left;
+        }
+        .hidden {
+            display: none;
+        }
+    </style>
+
+    <script src="https://cdn.sheetjs.com/xlsx-latest/package/dist/xlsx.full.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.4.0/jspdf.umd.min.js"></script>
+    <!--<script src="https://cdnjs.cloudflare.com/ajax/libs/docx/7.2.0/docx.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
+    <script src="https://unpkg.com/docx@7.3.0/build/docx.min.js"></script>-->
+
+</head>
+<body>
+    <h2>Student Entry</h2>
+    <form id="studentForm">
+        <label><input type="radio" name="importType" value="append" checked> Append data</label>
+        <label><input type="radio" name="importType" value="replace"> Replace data</label><br><br>
+        <label for="excelFile">Upload Excel File:</label>
+        <input type="file" id="excelFile" accept=".xlsx, .xls"><br><br>
+        <button type="button" onclick="readExcel()">Import Data</button><br><br>
+        
+        <label for="name">Name:</label>
+        <input type="text" id="name" name="name" required><br><br>
+        <label for="surname">Surname:</label>
+        <input type="text" id="surname" name="surname" required><br><br>
+
+        <fieldset>
+            <legend>Select Trips</legend>
+            <label><input type="checkbox" name="Trip" value="Trip 1" data-cost="30"> Trip 1</label><br>
+            <label><input type="checkbox" name="Trip" value="Trip 2" data-cost="50"> Trip 2</label><br>
+            <label><input type="checkbox" name="Trip" value="Trip 3" data-cost="20"> Trip 3</label><br>
+        </fieldset>
+        <br>
+        <button type="button" id="submitBtn" onclick="addOrUpdateStudent()">Submit</button>
+    </form>
+
+    <h2>Students List</h2>
+    <table id="studentsTable">
+        <thead>
+            <tr>
+                <th>Name</th>
+                <th>Surname</th>
+                <th>Trips</th>
+                <th>Total Amount (€)</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+        </tbody>
+    </table>
+
+    <h2>Trips Summary</h2>
+    <table id="tripsSummary">
+        <thead>
+            <tr>
+                <th>Trip</th>
+                <th>Total Students</th>
+                <th>Total Amount (€)</th>
+            </tr>
+        </thead>
+        <tbody>
+            <!-- Summary rows will be added here dynamically -->
+        </tbody>
+    </table>
+
+    <h3>Final Amount: <span id="finalAmount">0</span> €</h3>
+
+    <h3>Print Students for Trip</h3>
+    <label for="selectTrip">Choose an Trip:</label>
+    <select id="selectTrip">
+        <option value="">-- Select Trip --</option>
+        <option value="Trip 1">Trip 1</option>
+        <option value="Trip 2">Trip 2</option>
+        <option value="Trip 3">Trip 3</option>
+    </select>
+    <ul id="tripstudentsList"></ul>
+    <button type="button" onclick="printStudentsForTripPDF()">Print to PDF</button>
+    <!--<button type="button" onclick="printStudentsForTripDOCX()">Print to DOCX</button>
+    <button id="printButton">Print Sample DOCX</button>-->
+
+
+    <script>
+        let editingRow = null;
+
+        const TripCosts = {
+                "Trip 1": 30,
+                "Trip 2": 50,
+                "Trip 3": 20
+        };
+
+        function addOrUpdateStudent() {
+            const form = document.getElementById('studentForm');
+            const name = form.name.value.trim();
+            const surname = form.surname.value.trim();
+            const trips = document.querySelectorAll('input[name="Trip"]:checked');
+            const TripNames = Array.from(trips).map(e => e.value);
+            const TripTotal = Array.from(trips).reduce((total, e) => total + parseInt(e.getAttribute('data-cost')), 0);
+
+            if (!name || !surname || TripNames.length === 0) {
+                alert('Please fill out all fields and select at least one Trip.');
+                return;
+            }
+
+            if (editingRow) {
+                updateRow(editingRow, name, surname, TripNames, TripTotal);
+            } else {
+                addRow(name, surname, TripNames, TripTotal);
+            }
+
+            resetForm();
+        }
+
+        function addRow(name, surname, TripNames, TripTotal) {
+            const table = document.getElementById('studentsTable').getElementsByTagName('tbody')[0];
+            const newRow = table.insertRow();
+            newRow.innerHTML = `
+                <td>${name}</td>
+                <td>${surname}</td>
+                <td>${TripNames.join(", ")}</td>
+                <td>${TripTotal}</td>
+                <td>
+                    <button onclick="editRow(this)">Edit</button>
+                    <button onclick="deleteRow(this)">Delete</button>
+                </td>
+            `;
+
+            updateFinalAmount(TripTotal);
+            addStudent(TripNames, TripTotal);
+        }
+
+        function deleteRow(button) {
+            const row = button.parentNode.parentNode;
+            const cells = row.getElementsByTagName('td');
+            const TripNames = cells[2].textContent.split(", ");
+            const totalAmountCell = parseInt(cells[3].textContent);
+
+            const TripAmounts = TripNames.map(e => totalAmountCell / TripNames.length);
+
+            updateFinalAmount(-totalAmountCell);
+            deleteStudent(TripNames, TripAmounts);
+
+            const table = document.getElementById('studentsTable').getElementsByTagName('tbody')[0];
+            table.deleteRow(row.rowIndex - 1);
+        }
+
+        function updateRow(row, name, surname, TripNames, TripTotal) {
+            const cells = row.getElementsByTagName('td');
+            const oldtrips = editingRow.oldtrips || [];
+            const oldTotal = parseInt(cells[3].textContent);
+
+            const removedtrips = oldtrips.filter(e => !TripNames.includes(e));
+            const addedtrips = TripNames.filter(e => !oldtrips.includes(e));
+
+            const removedTripCosts = removedtrips.map(e => TripCosts[e] || 0);
+            const addedTripCosts = addedtrips.map(e => TripCosts[e] || 0);
+
+            deleteStudent(removedtrips, removedTripCosts);
+            addStudent(addedtrips, addedTripCosts);
+
+            const difference = TripTotal - oldTotal;
+            updateFinalAmount(difference);
+
+            cells[0].textContent = name;
+            cells[1].textContent = surname;
+            cells[2].textContent = TripNames.join(", ");
+            cells[3].textContent = TripTotal;
+
+            resetForm();
+        }
+
+        function editRow(button) {
+
+            const row = button.parentNode.parentNode;
+            const cells = row.getElementsByTagName('td');
+
+            document.getElementById('name').value = cells[0].textContent.trim();
+            document.getElementById('surname').value = cells[1].textContent.trim();
+
+
+            const tripsList = cells[2].textContent.split(", ").map(e => e.trim());
+            document.querySelectorAll('input[name="Trip"]').forEach(checkbox => {
+                checkbox.checked = tripsList.includes(checkbox.value);
+            });
+
+            editingRow = row;
+            editingRow.oldtrips = tripsList;
+            document.getElementById('submitBtn').textContent = "Update";
+
+        }
+
+        function updateFinalAmount(change) {
+            let finalAmount = parseInt(document.getElementById('finalAmount').textContent);
+            finalAmount += change;
+            document.getElementById('finalAmount').textContent = finalAmount;
+        }
+
+        function readExcel() {
+            const fileInput = document.getElementById('excelFile');
+            const reader = new FileReader();
+            const importType = document.querySelector('input[name="importType"]:checked').value;
+            reader.onload = function(e) {
+                const data = new Uint8Array(e.target.result);
+                const workbook = XLSX.read(data, {type: 'array'});
+                const firstSheetName = workbook.SheetNames[0];
+                const worksheet = workbook.Sheets[firstSheetName];
+                const json = XLSX.utils.sheet_to_json(worksheet);
+
+                const tableBody = document.querySelector("#studentsTable tbody");
+
+                if (importType === 'replace') {
+                    tableBody.innerHTML = "";
+                    document.getElementById('finalAmount').textContent = "0";
+                    resettripsSummary();
+                }
+
+                json.forEach(row => {
+                    const name = row.ime || "Unnamed";
+                    const surname = row.prezime || "Unnamed";
+                    const TripNames = [];
+                    let TripTotal = 0;
+
+                    if (row.izlet1 === '*') { TripNames.push("Trip 1"); TripTotal += 30; }
+                    if (row.izlet2 === '*') { TripNames.push("Trip 2"); TripTotal += 50; }
+                    if (row.izlet3 === '*') { TripNames.push("Trip 3"); TripTotal += 20; }
+
+                    addRow(name, surname, TripNames, TripTotal);
+                });
+            };
+
+            reader.readAsArrayBuffer(fileInput.files[0]);
+        }
+
+        function addStudent(TripNames, TripCosts) {
+            TripNames.forEach(Trip => {
+                if (tripsSummary[Trip]) {
+                    tripsSummary[Trip].students += 1;
+                }
+            });
+
+            rendertripsSummary();
+        }
+
+        function deleteStudent(TripNames, TripCosts) {
+            TripNames.forEach(Trip => {
+                if (tripsSummary[Trip] && tripsSummary[Trip].students > 0) {
+                    tripsSummary[Trip].students -= 1;
+                }
+            });
+
+            rendertripsSummary();
+        }
+
+        let tripsSummary = {
+            "Trip 1": { students: 0, totalAmount: 0 },
+            "Trip 2": { students: 0, totalAmount: 0 },
+            "Trip 3": { students: 0, totalAmount: 0 }
+        };
+
+        function updatetripsSummary(Trip, cost, add = true) {
+            if (add) {
+                tripsSummary[Trip].students += 1;
+                tripsSummary[Trip].totalAmount += cost;
+            } else {
+                tripsSummary[Trip].students -= 1;
+                tripsSummary[Trip].totalAmount -= cost;
+            }
+        }
+
+        function updatetripsummaryOnEdit(oldRow, newTripNames, newTotal) {
+            const oldtripsList = oldRow.cells[2].textContent.split(", ").map(e => e.trim());
+            const oldTotal = parseInt(oldRow.cells[3].textContent);
+
+            const removedtrips = oldtripsList.filter(e => !newTripNames.includes(e));
+            const addedtrips = newTripNames.filter(e => !oldtripsList.includes(e));
+
+            const removedTripCosts = removedtrips.map(e => TripCosts[e] || 0);
+            const addedTripCosts = addedtrips.map(e => TripCosts[e] || 0);
+
+            deleteStudent(removedtrips, removedTripCosts);
+            addStudent(addedtrips, addedTripCosts);
+
+            rendertripsSummary();
+        
+        }
+
+        function rendertripsSummary() {
+            const TripCosts = {
+            "Trip 1": 30,
+            "Trip 2": 50,
+            "Trip 3": 20
+        };
+
+        const tbody = document.getElementById('tripsSummary').getElementsByTagName('tbody')[0];
+        tbody.innerHTML = "";
+
+        Object.keys(tripsSummary).forEach(Trip => {
+            const students = tripsSummary[Trip].students;
+            const totalAmount = students * TripCosts[Trip];
+            tripsSummary[Trip].totalAmount = totalAmount;
+
+            const row = tbody.insertRow();
+            row.innerHTML = `<td>${Trip}</td><td>${students}</td><td>${totalAmount}</td>`;
+        });
+        }
+
+        function resetForm() {
+            document.getElementById('studentForm').reset();
+            document.querySelectorAll('input[name="Trip"]').forEach(checkbox => {
+                checkbox.checked = false;
+            });
+            editingRow = null;
+            document.getElementById('submitBtn').textContent = "Submit";
+        }
+
+        document.addEventListener('DOMContentLoaded', function() {
+            rendertripsSummary();
+        });
+
+        function resettripsSummary() {
+            Object.keys(tripsSummary).forEach(Trip => {
+                tripsSummary[Trip].students = 0;
+                tripsSummary[Trip].totalAmount = 0;
+            });
+            rendertripsSummary();
+        }
+
+        function printStudentsForTripPDF() {
+            const selectedTrip = document.getElementById("selectTrip").value;
+
+            if (!selectedTrip) {
+                alert("Please select an Trip to print.");
+                return;
+            }
+
+            const tableRows = document.querySelectorAll("#studentsTable tbody tr");
+
+            let studentData = `Students in ${selectedTrip}:\n\n`;
+            tableRows.forEach(row => {
+                const trips = row.cells[2].textContent.split(", ");
+                if (trips.includes(selectedTrip)) {
+                    const name = row.cells[0].textContent;
+                    const surname = row.cells[1].textContent;
+                    studentData += `${name} ${surname}\n`;
+                }
+            });
+
+            if (studentData === `Students in ${selectedTrip}:\n\n`) {
+                studentData += "No students found.";
+            }
+
+            const { jsPDF } = window.jspdf;
+            const doc = new jsPDF();
+            doc.setFontSize(12);
+            doc.text(studentData, 10, 10);
+            doc.save(`${selectedTrip}_Students.pdf`);
+        }
+
+        function printStudentsForTripDOCX() {
+            const selectedTrip = document.getElementById("selectTrip").value;
+
+            if (!selectedTrip) {
+                alert("Please select an Trip to print.");
+                return;
+            }
+
+            const tableRows = document.querySelectorAll("#studentsTable tbody tr");
+
+            let studentsList = [];
+            tableRows.forEach(row => {
+                const trips = row.cells[2].textContent.split(", ");
+                if (trips.includes(selectedTrip)) {
+                    const name = row.cells[0].textContent;
+                    const surname = row.cells[1].textContent;
+                    studentsList.push(`${name} ${surname}`);
+                }
+            });
+
+            if (studentsList.length === 0) {
+                studentsList = ["No students found."];
+            }
+
+            const { Document, Packer, Paragraph } = window.docx;
+            const doc = new Document({
+                sections: [
+                    {
+                        children: [
+                            new Paragraph(`Students in ${selectedTrip}:`),
+                            ...studentsList.map(student => new Paragraph(student)),
+                        ],
+                    },
+                ],
+            });
+
+            Packer.toBlob(doc).then(blob => {
+                saveAs(blob, `${selectedTrip}_Students.docx`);
+            });
+        }
+
+    </script>
+</body>
+</html>
