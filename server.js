@@ -1,77 +1,116 @@
 const express = require('express');
 const mongoose = require('mongoose');
 const bodyParser = require('body-parser');
+const dotenv = require('dotenv');
+const User = require('models/User');
+const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
-require('dotenv').config();
-const path = require('path');
+
+dotenv.config();
 
 const app = express();
-const port = process.env.PORT || 3000;
 
 app.use(bodyParser.json());
+app.use(bodyParser.urlencoded({ extended: true }));
 
-// Serve static files from the "public" directory
-app.use(express.static(path.join(__dirname, 'public')));
+mongoose.connect(process.env.MONGO_URI, { useNewUrlParser: true, useUnifiedTopology: true })
+    .then(() => console.log('MongoDB connected'))
+    .catch(err => console.log(err));
 
-// MongoDB connection
-mongoose.connect(process.env.DATABASE_URL)
-  .then(() => console.log('Connected to MongoDB'))
-  .catch(err => console.error('Could not connect to MongoDB', err));
+// Serve static files
+app.use(express.static('public'));
 
-// JWT secret key
-const secretKey = process.env.JWT_SECRET;
-
-// User schema and model
-const userSchema = new mongoose.Schema({
-  username: String,
-  password: String
+// User registration
+app.post('/register', async (req, res) => {
+    const { username, password, role } = req.body;
+    const user = new User({ username, password, role });
+    try {
+        await user.save();
+        res.redirect('/login');
+    } catch (error) {
+        res.status(400).json({ error: error.message });
+    }
 });
-const User = mongoose.model('User', userSchema);
 
-// Middleware to verify token
-const verifyToken = (req, res, next) => {
-  const bearerHeader = req.headers['authorization'];
-  if (bearerHeader) {
-    const token = bearerHeader.split(' ')[1];
-    jwt.verify(token, secretKey, (err, authData) => {
-      if (err) {
-        res.sendStatus(403);
-      } else {
-        req.user = authData.user;
-        next();
-      }
-    });
-  } else {
-    res.sendStatus(403);
-  }
+// User login
+app.post('/login', async (req, res) => {
+    const { username, password } = req.body;
+    try {
+        const user = await User.findOne({ username });
+        if (user && await user.matchPassword(password)) {
+            const token = jwt.sign({ id: user._id, role: user.role }, process.env.JWT_SECRET, { expiresIn: '1h' });
+            res.cookie('token', token, { httpOnly: true });
+            switch (user.role) {
+                case 'admin':
+                    res.redirect('/admin');
+                    break;
+                case 'teacher':
+                    res.redirect('/teacher');
+                    break;
+                case 'animator':
+                    res.redirect('/animator');
+                    break;
+                case 'organizer':
+                    res.redirect('/organizer');
+                    break;
+                default:
+                    res.status(401).json({ message: 'Invalid role' });
+            }
+        } else {
+            res.status(401).json({ message: 'Invalid credentials' });
+        }
+    } catch (error) {
+        res.status(400).json({ error: error.message });
+    }
+});
+
+// Middleware for protected routes
+const protect = async (req, res, next) => {
+    const token = req.cookies.token;
+    if (token) {
+        try {
+            const decoded = jwt.verify(token, process.env.JWT_SECRET);
+            req.user = await User.findById(decoded.id);
+            next();
+        } catch (error) {
+            res.status(401).json({ message: 'Not authorized, token failed' });
+        }
+    } else {
+        res.status(401).json({ message: 'Not authorized, no token' });
+    }
 };
 
-// Serve the tripsCatalog.html file at the root URL
-app.get('/', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'tripsCatalog.html'));
+// Admin route
+app.get('/admin', protect, (req, res) => {
+    if (req.user.role !== 'admin') {
+        return res.status(403).json({ message: 'Access denied' });
+    }
+    res.send('Welcome to the admin page');
 });
 
-// Login route
-app.post('/login', async (req, res) => {
-  const { username, password } = req.body;
-  const user = await User.findOne({ username, password });
-  if (user) {
-    const token = jwt.sign({ user }, secretKey);
-    res.json({ token });
-  } else {
-    res.sendStatus(401);
-  }
+// Teacher route
+app.get('/teacher', protect, (req, res) => {
+    if (req.user.role !== 'teacher') {
+        return res.status(403).json({ message: 'Access denied' });
+    }
+    res.send('Welcome to the teacher page');
 });
 
-// Catalog route
-app.get('/catalog', verifyToken, (req, res) => {
-  res.json({ message: 'Catalog data' });
+// Animator route
+app.get('/animator', protect, (req, res) => {
+    if (req.user.role !== 'animator') {
+        return res.status(403).json({ message: 'Access denied' });
+    }
+    res.send('Welcome to the animator page');
 });
 
-// Import and use teacher routes
-const teacherRoutes = require('./routes/teacher');
-app.use('/teachers', verifyToken, teacherRoutes);
-
-app.listen(port, () => {
-  console.log(`Server running on port ${port}`);
+// Organizer route
+app.get('/organizer', protect, (req, res) => {
+    if (req.user.role !== 'organizer') {
+        return res.status(403).json({ message: 'Access denied' });
+    }
+    res.send('Welcome to the organizer page');
 });
+
+const PORT = process.env.PORT || 5000;
+app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
