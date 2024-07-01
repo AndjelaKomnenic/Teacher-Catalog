@@ -7,19 +7,42 @@
 </head>
 <body>
     <h2>Register</h2>
-    <form id="registerForm" action="/register" method="POST">
+    <form id="registerForm">
         <label for="username">Username:</label>
-        <input type="text" id="username" name="username" required><br>
+        <input type="text" id="username" name="username" required><br><br>
         <label for="password">Password:</label>
-        <input type="password" id="password" name="password" required><br>
+        <input type="password" id="password" name="password" required><br><br>
         <label for="role">Role:</label>
-        <select id="role" name="role">
+        <select id="role" name="role" required>
             <option value="admin">Admin</option>
             <option value="teacher">Teacher</option>
             <option value="animator">Animator</option>
             <option value="organizer">Organizer</option>
-        </select><br>
+        </select><br><br>
         <button type="submit">Register</button>
     </form>
+    <p><a href="login.html">Already have an account? Log in here.</a></p>
+
+    <script>
+        document.getElementById('registerForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const username = document.getElementById('username').value;
+            const password = document.getElementById('password').value;
+            const role = document.getElementById('role').value;
+
+            const response = await fetch('/register', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ username, password, role }),
+            });
+
+            if (response.ok) {
+                alert('Registration successful!');
+                window.location.href = 'login.html';
+            } else {
+                alert(await response.text());
+            }
+        });
+    </script>
 </body>
 </html>
